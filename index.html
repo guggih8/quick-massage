@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Inscrições — Quick Massage (11/11/2025)</title>
+
+  <style>
+    /* Estilos simples e responsivos */
+    :root{--card-bg:#fff;--accent:#2b8be6;--muted:#666}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#f3f7fb;color:#222;display:flex;align-items:flex-start;justify-content:center;padding:32px}
+    .wrap{width:100%;max-width:920px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+    h1{font-size:20px;margin:0}
+    small{color:var(--muted)}
+    .grid{display:grid;grid-template-columns:1fr 360px;gap:18px}
+    .card{background:var(--card-bg);border-radius:10px;padding:18px;box-shadow:0 6px 18px rgba(20,30,40,0.06)}
+    form input, form select{width:100%;padding:10px;margin-top:8px;border-radius:8px;border:1px solid #d5dbe6;box-sizing:border-box}
+    button{display:inline-block;padding:10px 12px;border-radius:8px;border:0;background:var(--accent);color:#fff;cursor:pointer;margin-top:10px}
+    button.secondary{background:#6c757d}
+    .slot-list{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+    .slot{padding:10px;border-radius:8px;background:#f7fbff;border:1px solid #e6f0ff;font-size:14px;display:flex;align-items:center;justify-content:space-between}
+    .badge{background:#eef6ff;padding:6px 8px;border-radius:8px;font-weight:600;color:#0b5fa5}
+    .full{background:#ffeef0;border:1px solid #ffd0d8;color:#a6313a}
+    .msg{margin-top:10px;color:#0b5fa5}
+    .error{color:#a6313a}
+    .small{font-size:13px;color:var(--muted)}
+    .export-note{margin-top:10px;font-size:13px;color:var(--muted)}
+    footer{margin-top:14px;font-size:13px;color:var(--muted);text-align:center}
+    @media (max-width:880px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Quick Massage — 11/11/2025</h1>
+        <small>Sessões entre 08:00 e 12:00 — 30 minutos por sessão — 4 vagas por horário</small>
+      </div>
+      <div style="text-align:right">
+        <small>Mais recursos em <a href="https://gptonline.ai/" target="_blank" rel="noopener" style="color:var(--accent)">gptonline.ai</a></small>
+      </div>
+    </header>
+
+    <div class="grid">
+      <!-- esquerda: formulário -->
+      <section class="card">
+        <h2 style="margin-top:0">Inscrever</h2>
+        <form id="form">
+          <label class="small">Nome</label>
+          <input type="text" id="nome" required placeholder="Nome completo" />
+          <label class="small">Email</label>
+          <input type="email" id="email" required placeholder="seu@exemplo.com" />
+          <label class="small">Horário (11/11/2025)</label>
+          <select id="horario" required></select>
+
+          <div style="display:flex;gap:8px;align-items:center">
+            <button type="submit">Inscrever</button>
+            <button type="button" id="btnExport" class="secondary">Exportar .xls</button>
+            <button type="button" id="btnClear" title="Apaga todos os dados locais" class="secondary" style="background:#e06f6f">Limpar dados</button>
+          </div>
+
+          <p id="mensagem" class="msg" aria-live="polite"></p>
+        </form>
+
+        <p class="export-note">O ficheiro .xls é gerado no cliente: formato compatível com Excel (HTML dentro de .xls). O ficheiro contém a relação de inscritos por horário.</p>
+      </section>
+
+      <!-- direita: lista de horários e vagas -->
+      <aside class="card">
+        <h3 style="margin-top:0">Horários e vagas restantes</h3>
+        <ul id="listaHorarios" class="slot-list" aria-live="polite"></ul>
+
+        <div style="margin-top:12px">
+          <h4 style="margin:0 0 6px 0">Resumo</h4>
+          <p class="small" id="resumo"></p>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <small>Dados guardados localmente no navegador. Para partilha entre utilizadores, é necessário um servidor.</small>
+    </footer>
+  </div>
+
+  <script>
+    /***********************************************
+     * Quick Massage - único ficheiro HTML
+     * - Horários: 08:00..11:30 (intervalo 30m)
+     * - 4 vagas por horário
+     * - Armazenamento: localStorage (chave: qmm_inscricoes)
+     * - Export: gera .xls (HTML table dentro de ficheiro application/vnd.ms-excel)
+     ***********************************************/
+
+    (function(){
+      // Configuração
+      const DATE_LABEL = "11/11/2025";
+      const SLOTS = generateSlots("08:00","12:00",30); // gera até 11:30 (não inclui 12:00 como início)
+      const MAX_PER_SLOT = 4;
+      const STORAGE_KEY = "qmm_inscricoes";
+
+      // Elementos DOM
+      const selectHorario = document.getElementById("horario");
+      const listaHorarios = document.getElementById("listaHorarios");
+      const form = document.getElementById("form");
+      const mensagem = document.getElementById("mensagem");
+      const btnExport = document.getElementById("btnExport");
+      const btnClear = document.getElementById("btnClear");
+      const resumo = document.getElementById("resumo");
+
+      // Estado (carrega do localStorage ou cria estrutura vazia)
+      let inscricoes = loadInscricoes();
+
+      // Inicialização UI
+      renderSelect();
+      renderSlots();
+      updateResumo();
+
+      // Eventos
+      form.addEventListener("submit", function(ev){
+        ev.preventDefault();
+        mensagem.textContent = ""; mensagem.classList.remove("error");
+        const nome = document.getElementById("nome").value.trim();
+        const email = document.getElementById("email").value.trim().toLowerCase();
+        const horario = selectHorario.value;
+
+        if(!nome || !email || !horario){
+          showError("Preencha todos os campos.");
+          return;
+        }
+
+        // validação simples do email
+        if(!validateEmail(email)){ showError("Email inválido."); return; }
+
+        // verifica se slot existe e se há vaga
+        const arr = inscricoes[horario] || [];
+        if(arr.length >= MAX_PER_SLOT){ showError("Desculpe — este horário já está cheio."); renderSelect(); renderSlots(); return; }
+
+        // evita mesmo email duplicado no mesmo horário
+        if(arr.some(x => x.email === email)){
+          showError("Este email já está inscrito neste horário.");
+          return;
+        }
+
+        // adiciona e guarda
+        arr.push({ nome, email, createdAt: new Date().toISOString() });
+        inscricoes[horario] = arr;
+        saveInscricoes();
+        mensagem.textContent = "Inscrição realizada com sucesso!";
+        form.reset();
+        renderSelect();
+        renderSlots();
+        updateResumo();
+      });
+
+      btnExport.addEventListener("click", function(){
+        exportXLS();
+      });
+
+      btnClear.addEventListener("click", function(){
+        if(confirm("Apagar todos os dados de inscrições guardados neste navegador? Esta ação é irreversível.")){
+          localStorage.removeItem(STORAGE_KEY);
+          inscricoes = loadInscricoes(); // recria estrutura vazia
+          renderSelect();
+          renderSlots();
+          updateResumo();
+          mensagem.textContent = "Dados apagados.";
+        }
+      });
+
+      // ----- Funções utilitárias -----
+      function generateSlots(start, end, minutesStep){
+        // start e end no formato "HH:MM". Gera slots começando em start até < end.
+        const out = [];
+        const [sh, sm] = start.split(":").map(Number);
+        const [eh, em] = end.split(":").map(Number);
+        let cur = new Date(2000,0,1,sh,sm,0,0);
+        const endDate = new Date(2000,0,1,eh,em,0,0);
+        while(cur < endDate){
+          const hh = String(cur.getHours()).padStart(2,"0");
+          const mm = String(cur.getMinutes()).padStart(2,"0");
+          out.push(hh+":"+mm);
+          cur.setMinutes(cur.getMinutes()+minutesStep);
+        }
+        // remove the last if it's exactly equal to end (we already ensure cur < end)
+        return out;
+      }
+
+      function loadInscricoes(){
+        try{
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if(raw){
+            const parsed = JSON.parse(raw);
+            // garante que todas as slots existam no objecto
+            SLOTS.forEach(s => { if(!parsed[s]) parsed[s]=parsed[s]||[]; });
+            return parsed;
+          }
+        }catch(e){ console.warn("Erro a ler storage",e); }
+        // criar estrutura vazia
+        const obj = {};
+        SLOTS.forEach(s => obj[s]=[]);
+        return obj;
+      }
+
+      function saveInscricoes(){
+        try{
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(inscricoes));
+        }catch(e){ console.warn("Erro a gravar storage",e); }
+      }
+
+      function renderSelect(){
+        selectHorario.innerHTML = "";
+        const available = SLOTS.filter(s => (inscricoes[s]||[]).length < MAX_PER_SLOT);
+        if(available.length === 0){
+          const opt = document.createElement("option");
+          opt.textContent = "Nenhum horário disponível";
+          opt.disabled = true;
+          selectHorario.appendChild(opt);
+          selectHorario.disabled = true;
+        } else {
+          selectHorario.disabled = false;
+          const placeholder = document.createElement("option");
+          placeholder.textContent = `Escolha um horário — ${DATE_LABEL}`;
+          placeholder.value = "";
+          placeholder.disabled = true;
+          placeholder.selected = true;
+          selectHorario.appendChild(placeholder);
+          available.forEach(h => {
+            const opt = document.createElement("option");
+            opt.value = h;
+            opt.textContent = `${h} (${MAX_PER_SLOT - (inscricoes[h]||[]).length} vagas restantes)`;
+            selectHorario.appendChild(opt);
+          });
+        }
+      }
+
+      function renderSlots(){
+        listaHorarios.innerHTML = "";
+        SLOTS.forEach(h => {
+          const li = document.createElement("li");
+          const count = (inscricoes[h]||[]).length;
+          li.className = "slot";
+          const left = document.createElement("div");
+          left.innerHTML = `<strong>${h}</strong><div class="small">${DATE_LABEL}</div>`;
+          const right = document.createElement("div");
+          if(count >= MAX_PER_SLOT){
+            right.innerHTML = `<span class="badge full">Cheio</span>`;
+          } else {
+            right.innerHTML = `<span class="badge">${MAX_PER_SLOT - count} vagas</span>`;
+          }
+          li.appendChild(left);
+          li.appendChild(right);
+          listaHorarios.appendChild(li);
+        });
+      }
+
+      function updateResumo(){
+        const total = SLOTS.reduce((acc,h)=>acc+(inscricoes[h]||[]).length,0);
+        const filled = SLOTS.filter(h => (inscricoes[h]||[]).length >= MAX_PER_SLOT).length;
+        resumo.textContent = `${total} inscrições no total · ${filled} horário(s) cheio(s) · ${SLOTS.length - filled} horário(s) com vagas.`;
+      }
+
+      function validateEmail(mail){
+        // regex simples
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail);
+      }
+
+      function showError(txt){
+        mensagem.textContent = txt;
+        mensagem.classList.add("error");
+      }
+
+      function exportXLS(){
+        // Monta uma tabela HTML (uma folha) com os dados por horário
+        // Excel consegue abrir ficheiros .xls com conteúdo HTML
+        const tableRows = [];
+        tableRows.push(`<tr><th>Horário</th><th>Nome</th><th>Email</th><th>Data/Hora Inscrição (UTC)</th></tr>`);
+        SLOTS.forEach(h => {
+          const arr = inscricoes[h] || [];
+          if(arr.length === 0){
+            // opcional: incluir linha vazia para horários sem inscritos
+            tableRows.push(`<tr><td>${h}</td><td></td><td></td><td></td></tr>`);
+          } else {
+            arr.forEach(p => {
+              const nomeSafe = escapeHtml(p.nome);
+              const emailSafe = escapeHtml(p.email);
+              const when = escapeHtml(p.createdAt || "");
+              tableRows.push(`<tr><td>${h}</td><td>${nomeSafe}</td><td>${emailSafe}</td><td>${when}</td></tr>`);
+            });
+          }
+        });
+
+        const html = `
+          <html xmlns:x="urn:schemas-microsoft-com:office:excel">
+          <head><meta charset="utf-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Inscrições</x:Name></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
+          <body><table border="1">${tableRows.join("")}</table></body></html>`;
+
+        const blob = new Blob([html], { type: "application/vnd.ms-excel" });
+        const filename = `relatorio_inscricoes_${DATE_LABEL.replace(/\//g,"-")}.xls`;
+
+        // Cria link de download
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+
+      function escapeHtml(s){
+        return String(s||"").replace(/[&<>"']/g,function(m){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]});
+      }
+
+    })();
+  </script>
+</body>
+</html>

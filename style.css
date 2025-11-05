@@ -1,0 +1,18 @@
+/* style.css */
+:root{--accent:#2b8be6;--muted:#6b7280}
+body{font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:#f6f9fb;margin:0;padding:24px;color:#111}
+.container{max-width:920px;margin:0 auto}
+header h1{margin:0;font-size:20px}
+.muted{color:var(--muted);margin:6px 0}
+main{display:flex;gap:18px;margin-top:16px}
+.card{background:#fff;padding:16px;border-radius:10px;box-shadow:0 6px 18px rgba(12,20,30,0.06);flex:1}
+.card h2,h3{margin-top:0}
+input,select{width:100%;padding:10px;margin-top:8px;border-radius:8px;border:1px solid #e6eef7;box-sizing:border-box}
+.actions{display:flex;gap:8px;margin-top:10px}
+button{padding:10px 12px;border-radius:8px;border:0;background:var(--accent);color:#fff;cursor:pointer}
+button.secondary{background:#6b7280}
+ul{list-style:none;padding:0;margin:8px 0;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+li{padding:8px;border-radius:8px;background:#f8fbff;border:1px solid #e6f0ff;display:flex;justify-content:space-between;align-items:center}
+.small{font-size:13px}
+.msg{margin-top:10px}
+@media (max-width:820px){main{flex-direction:column}}
