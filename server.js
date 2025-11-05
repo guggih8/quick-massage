@@ -1,181 +1,84 @@
-// server.js
 import express from "express";
 import bodyParser from "body-parser";
 import cors from "cors";
 import ExcelJS from "exceljs";
-import Database from "better-sqlite3";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import sqlite3 from "sqlite3";
+import { open } from "sqlite";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-/**
- * Configurações de horário
- * Sessões no dia 11/11/2025 entre 08:00 e 12:00,
- * duração 30 minutos => slots: 08:00, 08:30, ..., 11:30
- */
-const SLOTS = [
-  "08:00","08:30","09:00","09:30",
-  "10:00","10:30","11:00","11:30"
-];
-const MAX_PER_SLOT = 4;
-const EVENT_DATE = "2025-11-11"; // formato ISO (YYYY-MM-DD), para referência
+const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static("public"));
 
-// --- Inicializa DB (arquivo database.db) ---
-const db = new Database(path.join(__dirname, "database.db"));
-
-// Criar tabela se não existir
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS registrations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL,
-    slot TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  )
-`).run();
-
-// Índice para consultas por slot/email
-db.prepare(`CREATE INDEX IF NOT EXISTS idx_slot ON registrations(slot)`).run();
-db.prepare(`CREATE INDEX IF NOT EXISTS idx_email ON registrations(email)`).run();
-
-// --- Statements preparados ---
-const countBySlotStmt = db.prepare("SELECT COUNT(*) AS cnt FROM registrations WHERE slot = ?");
-const insertStmt = db.prepare("INSERT INTO registrations (name, email, slot, created_at) VALUES (?, ?, ?, ?)");
-const selectAllStmt = db.prepare("SELECT * FROM registrations ORDER BY slot, created_at");
-
-// Função utilitária para obter horários disponíveis
-function getAvailableSlots() {
-  const result = [];
-  for (const s of SLOTS) {
-    const row = countBySlotStmt.get(s);
-    const count = row ? row.cnt : 0;
-    if (count < MAX_PER_SLOT) result.push({ slot: s, remaining: MAX_PER_SLOT - count });
+// ---- Conexão à base de dados SQLite ----
+const db = new sqlite3.Database("./database.db", (err) => {
+  if (err) console.error("Erro ao abrir BD:", err.message);
+  else {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS inscricoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        email TEXT NOT NULL,
+        horario TEXT NOT NULL
+      )
+    `);
   }
-  return result;
-}
+});
 
-// --- Rotas API ---
+// ---- Lista de horários disponíveis ----
+const horarios = [
+  "08:00", "08:30", "09:00", "09:30",
+  "10:00", "10:30", "11:00", "11:30"
+];
 
-// Retorna slots disponíveis (apenas horários ainda com vagas)
+// ---- Obter horários disponíveis ----
 app.get("/api/horarios", (req, res) => {
-  const avail = getAvailableSlots().map(x => ({ slot: x.slot, remaining: x.remaining }));
-  res.json({ date: EVENT_DATE, slots: avail });
+  db.all("SELECT horario, COUNT(*) as vagas FROM inscricoes GROUP BY horario", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const ocupacao = Object.fromEntries(rows.map(r => [r.horario, r.vagas]));
+    const disponiveis = horarios.filter(h => !ocupacao[h] || ocupacao[h] < 4);
+    res.json(disponiveis);
+  });
 });
 
-// Inscrição
+// ---- Nova inscrição ----
 app.post("/api/inscrever", (req, res) => {
-  try {
-    const { name, email, slot } = req.body || {};
-    if (!name || !email || !slot) {
-      return res.status(400).json({ error: "Campos obrigatórios: name, email, slot" });
-    }
+  const { nome, email, horario } = req.body;
+  if (!nome || !email || !horario) return res.status(400).json({ error: "Preencha todos os campos." });
 
-    if (!SLOTS.includes(slot)) {
-      return res.status(400).json({ error: "Horário inválido" });
-    }
+  db.get("SELECT COUNT(*) as total FROM inscricoes WHERE horario = ?", [horario], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (row.total >= 4) return res.status(400).json({ error: "Horário esgotado." });
 
-    // Validação simples do email
-    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailPattern.test(email)) {
-      return res.status(400).json({ error: "Email inválido" });
-    }
-
-    // Realizar operação em transacção para evitar race conditions
-    const insertTx = db.transaction((nameInner, emailInner, slotInner) => {
-      const row = countBySlotStmt.get(slotInner);
-      const cnt = row ? row.cnt : 0;
-      if (cnt >= MAX_PER_SLOT) {
-        throw new Error("SLOT_FULL");
-      }
-      // Evita duplicação de email no mesmo slot
-      const exists = db.prepare("SELECT 1 FROM registrations WHERE slot = ? AND email = ? LIMIT 1").get(slotInner, emailInner);
-      if (exists) {
-        throw new Error("ALREADY_REGISTERED");
-      }
-      const now = new Date().toISOString();
-      insertStmt.run(nameInner, emailInner, slotInner, now);
-      return true;
+    db.run("INSERT INTO inscricoes (nome, email, horario) VALUES (?, ?, ?)", [nome, email, horario], function (err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+      res.json({ success: true });
     });
-
-    try {
-      insertTx(name.trim(), email.trim().toLowerCase(), slot);
-      return res.json({ ok: true, message: "Inscrição realizada com sucesso" });
-    } catch (err) {
-      if (err.message === "SLOT_FULL") return res.status(400).json({ error: "Horário já cheio" });
-      if (err.message === "ALREADY_REGISTERED") return res.status(400).json({ error: "Email já inscrito neste horário" });
-      console.error("Erro transacção:", err);
-      return res.status(500).json({ error: "Erro ao inscrever" });
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Erro servidor" });
-  }
+  });
 });
 
-// Exportar relatório em formato Excel (.xlsx) - usamos exceljs para melhor compatibilidade
-app.get("/api/relatorio", async (req, res) => {
-  try {
-    const rows = selectAllStmt.all(); // [{id,name,email,slot,created_at}, ...]
+// ---- Exportar relatório Excel ----
+app.get("/api/exportar", (req, res) => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Inscrições");
+  sheet.columns = [
+    { header: "Nome", key: "nome", width: 25 },
+    { header: "Email", key: "email", width: 30 },
+    { header: "Horário", key: "horario", width: 10 }
+  ];
 
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet("Inscricoes");
+  db.all("SELECT * FROM inscricoes ORDER BY horario", [], async (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    rows.forEach(i => sheet.addRow(i));
 
-    sheet.columns = [
-      { header: "Horário", key: "slot", width: 12 },
-      { header: "Nome", key: "name", width: 30 },
-      { header: "Email", key: "email", width: 30 },
-      { header: "Inscrito em (UTC)", key: "created_at", width: 25 }
-    ];
-
-    // Inserir linhas na mesma ordem dos slots
-    for (const s of SLOTS) {
-      const group = rows.filter(r => r.slot === s);
-      if (group.length === 0) {
-        // opcional: adicionar linha vazia para horário sem inscritos
-        sheet.addRow({ slot: s, name: "", email: "", created_at: "" });
-      } else {
-        for (const r of group) {
-          sheet.addRow({ slot: r.slot, name: r.name, email: r.email, created_at: r.created_at });
-        }
-      }
-    }
-
-    const filename = `relatorio_inscricoes_${EVENT_DATE}.xlsx`;
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Disposition", "attachment; filename=inscricoes_quick_massage.xlsx");
     await workbook.xlsx.write(res);
     res.end();
-  } catch (err) {
-    console.error("Erro ao gerar relatório:", err);
-    res.status(500).json({ error: "Falha ao gerar relatório" });
-  }
-});
-
-// Rota que retorna contagens por slot (útil para frontend)
-app.get("/api/status", (req, res) => {
-  const status = SLOTS.map(s => {
-    const row = countBySlotStmt.get(s);
-    const cnt = row ? row.cnt : 0;
-    return { slot: s, count: cnt, remaining: Math.max(0, MAX_PER_SLOT - cnt) };
   });
-  res.json({ date: EVENT_DATE, slots: status, maxPerSlot: MAX_PER_SLOT });
 });
 
-// Serve index.html por padrão (já servis static em /public)
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
+app.listen(port, () => console.log(`Servidor a correr em http://localhost:${port}`));
 
-// Start
-app.listen(PORT, () => {
-  console.log(`Servidor rodando em http://localhost:${PORT}`);
-});
